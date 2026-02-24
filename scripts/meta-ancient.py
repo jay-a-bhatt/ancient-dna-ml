@@ -107,5 +107,5 @@ combined_df = combined_df.drop_duplicates(subset=['Master_ID'], keep='first')
 combined_df = combined_df.dropna(subset=['continent'])
 
 # Save to CSV
-output_filename = "ancient_dna_metadata.csv"
+output_filename = "ancient_mtDNA_metadata.csv"
 combined_df.to_csv(output_filename, index=False)

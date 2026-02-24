@@ -114,7 +114,7 @@ print(f"Number of 'Other/Unknown' records to be removed: {(df['continent'] == "O
 df = df[df['continent'] != "Other/Unknown"].copy()
 
 # Save to CSV
-df.to_csv("modern_mtdna_metadata.csv", index=False)
+df.to_csv("modern_mtDNA_metadata.csv", index=False)
 
 # Output results
 print(f"Total records: {record_count}")
