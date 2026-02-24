@@ -62,13 +62,13 @@ def get_amtDB_cols(file_path):
     except ValueError:
         print("One of the columns was not found in the CSV.")
 
-def get_AADR_cols(file_path):
-    ids = [record.id for record in SeqIO.parse("aadr.fasta", "fasta")]
+def get_AADR_cols(metadata_filepath, fasta_filepath):
+    ids = [record.id for record in SeqIO.parse(fasta_filepath, "fasta")]
     print(f"AADR fasta ID count: {len(ids)}")
     df_fasta_ids = pd.DataFrame(ids, columns=['Genetic_ID'])
 
     # Keep Genetic ID, age, country.
-    df_meta = pd.read_excel(file_path, na_values=["n/a (<2x)", ".."], usecols=[0,1,9,15,31])
+    df_meta = pd.read_excel(metadata_filepath, na_values=["n/a (<2x)", ".."], usecols=[0,1,9,15,31])
     df_meta.rename(columns={df_meta.columns[0]: 'Genetic_ID'}, inplace=True)
     df_meta.rename(columns={df_meta.columns[1]: 'Master_ID'}, inplace=True)
     df_meta.rename(columns={df_meta.columns[2]: 'age'}, inplace=True)
@@ -96,13 +96,16 @@ def get_AADR_cols(file_path):
 
     return df_final
 
-amtDB_df = get_amtDB_cols("amtdb_metadata.csv")
-aadr_df  = get_AADR_cols("v62.0_1240k_public.xlsx")
+amtDB_df = get_amtDB_cols("../data/metadata/amtdb_metadata.csv")
+aadr_df  = get_AADR_cols("../data/metadata/v62.0_1240k_public.xlsx", "../data/aadr.fasta")
 
 # If a Master_ID exists in both, keep='first' keeps the amtDB row
 combined_df = pd.concat([amtDB_df, aadr_df], ignore_index=True)
 combined_df = combined_df.drop_duplicates(subset=['Master_ID'], keep='first')
 
+# drop rows with no continent
+combined_df = combined_df.dropna(subset=['continent'])
+
 # Save to CSV
-output_filename = "combined_ancient_dna_metadata.csv"
+output_filename = "ancient_dna_metadata.csv"
 combined_df.to_csv(output_filename, index=False)
