@@ -1,4 +1,5 @@
 import pandas as pd
+import os
 from sklearn.model_selection import train_test_split
 
 def split_three_way(df, label):
@@ -66,8 +67,8 @@ def balance_by_column(df_a, df_b, column_name):
         balanced_df_a = pd.concat(balanced_list_a, ignore_index=True)
         balanced_df_b = pd.concat(balanced_list_b, ignore_index=True)
 
-        balanced_df_a.drop(columns=['set'])
-        balanced_df_b.drop(columns=['set'])
+        balanced_df_a.drop(columns=['set'], inplace=True)
+        balanced_df_b.drop(columns=['set'], inplace=True)
 
         df_a.drop(columns=['set'])
         df_b.drop(columns=['set'])
@@ -92,3 +93,20 @@ print(stats)
 # Execute splits
 anc_train, anc_val, anc_test = split_three_way(ancient_df_balanced, "Ancient")
 mod_train, mod_val, mod_test = split_three_way(modern_df_balanced, "Modern")
+
+output_dir = "./training-metadata"
+os.makedirs(output_dir, exist_ok=True)
+
+datasets = {
+    "anc_train.csv": anc_train,
+    "anc_val.csv": anc_val,
+    "anc_test.csv": anc_test,
+    "mod_train.csv": mod_train,
+    "mod_val.csv": mod_val,
+    "mod_test.csv": mod_test
+}
+
+for filename, df in datasets.items():
+    file_path = os.path.join(output_dir, filename)
+    df.to_csv(file_path, index=False)
+    print(f"Saved: {file_path}")
