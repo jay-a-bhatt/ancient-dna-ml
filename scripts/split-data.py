@@ -1,6 +1,14 @@
+from types import MethodDescriptorType
 import pandas as pd
 import os
 from sklearn.model_selection import train_test_split
+from Bio import SeqIO
+
+fasta_data_filepaths = [
+        "../data/modern_mtdna_raw.fasta",
+        "../data/aadr.fasta",
+        "../data/amtDB.fasta"
+]
 
 def split_three_way(df, label):
     # 1. First split: 60% Train, 40% 'Remainder'
@@ -23,6 +31,27 @@ def split_three_way(df, label):
     print(f"--- {label} Split Summary ---")
     print(f"Train: {len(train)} | Val: {len(val)} | Test: {len(test)}")
     return train, val, test
+
+def create_mega_fasta(ancient_df, modern_df):
+    combined_df = pd.concat([ancient_df[['genetic_id']], modern_df[['genetic_id']]])
+    records = []
+
+    existing_fasta_paths = [f for f in fasta_data_filepaths if os.path.exists(f)]
+    fasta_index = SeqIO.to_dict((rec for f in existing_fasta_paths for rec in SeqIO.parse(f, "fasta")))
+
+    for genetic_id in combined_df['genetic_id']:
+        record = fasta_index.get(genetic_id)
+        if record is not None:
+            records.append(record)
+        else:
+            print(f"Could not find record for {genetic_id}")
+
+    # Write all records to a file
+    mega_fasta_filename = "../data/generated/mega.fasta"
+    count = SeqIO.write(records, mega_fasta_filename, "fasta")
+
+    print(f"Successfully wrote {count} records to {mega_fasta_filename}")
+    return
 
 # Load data
 ancient_df = pd.read_csv('ancient_mtDNA_metadata.csv')
@@ -90,11 +119,13 @@ stats.columns = ['Ancient', 'Modern']
 
 print(stats)
 
+create_mega_fasta(ancient_df_balanced, modern_df_balanced)
+
 # Execute splits
 anc_train, anc_val, anc_test = split_three_way(ancient_df_balanced, "Ancient")
 mod_train, mod_val, mod_test = split_three_way(modern_df_balanced, "Modern")
 
-output_dir = "./training-metadata"
+output_dir = "../data/generated/training-metadata"
 os.makedirs(output_dir, exist_ok=True)
 
 datasets = {
