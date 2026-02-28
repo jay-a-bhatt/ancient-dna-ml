@@ -7,7 +7,7 @@ from Bio import SeqIO
 fasta_data_filepaths = [
         "../data/modern_mtdna_raw.fasta",
         "../data/aadr.fasta",
-        "../data/amtDB.fasta"
+        "../data/amtdb_2025.fasta"
 ]
 
 def split_three_way(df, label):
