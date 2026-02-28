@@ -2,6 +2,7 @@ from types import MethodDescriptorType
 import pandas as pd
 import os
 from sklearn.model_selection import train_test_split
+from Bio.SeqRecord import SeqRecord
 from Bio import SeqIO
 
 fasta_data_filepaths = [
@@ -33,16 +34,27 @@ def split_three_way(df, label):
     return train, val, test
 
 def create_mega_fasta(ancient_df, modern_df):
-    combined_df = pd.concat([ancient_df[['genetic_id']], modern_df[['genetic_id']]])
+    combined_df = pd.concat([
+        ancient_df[['genetic_id', 'age']],
+        modern_df[['genetic_id', 'age']]
+    ], ignore_index=True)
     records = []
 
     existing_fasta_paths = [f for f in fasta_data_filepaths if os.path.exists(f)]
     fasta_index = SeqIO.to_dict((rec for f in existing_fasta_paths for rec in SeqIO.parse(f, "fasta")))
 
-    for genetic_id in combined_df['genetic_id']:
-        record = fasta_index.get(genetic_id)
+    for _, row in combined_df.iterrows():
+        genetic_id = row['genetic_id']
+        age        = row['age']
+        record     = fasta_index.get(genetic_id)
+
         if record is not None:
-            records.append(record)
+            new_record = SeqRecord(
+                seq = record.seq,
+                id  = str(genetic_id),
+                description = str(age)
+            )
+            records.append(new_record)
         else:
             print(f"Could not find record for {genetic_id}")
 
