@@ -33,12 +33,13 @@ def split_three_way(df, label):
     print(f"Train: {len(train)} | Val: {len(val)} | Test: {len(test)}")
     return train, val, test
 
-def create_mega_fasta(ancient_df, modern_df):
+def create_mega_fasta(ancient_df, modern_df, output_name):
     combined_df = pd.concat([
         ancient_df[['genetic_id', 'age']],
         modern_df[['genetic_id', 'age']]
     ], ignore_index=True)
     records = []
+    missing_record_count = 0
 
     existing_fasta_paths = [f for f in fasta_data_filepaths if os.path.exists(f)]
     fasta_index = SeqIO.to_dict((rec for f in existing_fasta_paths for rec in SeqIO.parse(f, "fasta")))
@@ -57,12 +58,16 @@ def create_mega_fasta(ancient_df, modern_df):
             records.append(new_record)
         else:
             print(f"Could not find record for {genetic_id}")
+            missing_record_count += 1
 
     # Write all records to a file
-    mega_fasta_filename = "../data/generated/mega.fasta"
+    mega_fasta_filename = "../data/generated/" + output_name
     count = SeqIO.write(records, mega_fasta_filename, "fasta")
 
     print(f"Successfully wrote {count} records to {mega_fasta_filename}")
+    if (missing_record_count > 0):
+        print(f"Missing {missing_record_count}")
+
     return
 
 # Load data
@@ -131,11 +136,15 @@ stats.columns = ['Ancient', 'Modern']
 
 print(stats)
 
-create_mega_fasta(ancient_df_balanced, modern_df_balanced)
+# create_mega_fasta(ancient_df_balanced, modern_df_balanced, "mega.fasta")
 
 # Execute splits
 anc_train, anc_val, anc_test = split_three_way(ancient_df_balanced, "Ancient")
 mod_train, mod_val, mod_test = split_three_way(modern_df_balanced, "Modern")
+
+create_mega_fasta(anc_train, mod_train, "mega_train.fasta")
+create_mega_fasta(anc_val, mod_val,     "mega_val.fasta")
+create_mega_fasta(anc_test, mod_test,   "mega_test.fasta")
 
 output_dir = "../data/generated/training-metadata"
 os.makedirs(output_dir, exist_ok=True)
