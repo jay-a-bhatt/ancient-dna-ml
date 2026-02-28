@@ -89,34 +89,57 @@ def run_falcon_for_sample(falcon_bin, sample_id, age, seq,
             '-x', top_file,
             temp_fasta_path, train_fasta]
 
-    with open(os.devnull, 'w') as devnull:
-        subprocess.run(cmd, stdout=devnull, stderr=devnull)
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f'    FALCON stderr: {result.stderr.strip()}')
 
     os.unlink(temp_fasta_path)
 
     results = []
-    if os.path.exists(top_file):
-        with open(top_file, 'r') as f:
-            for line in f:
-                parts = line.strip().split('\t')
-                if len(parts) < 4:
-                    continue
-                db_header = parts[3]
-                db_parts  = db_header.split(' ', 1)   # space-delimited header
-                db_id     = db_parts[0]
-                try:
-                    db_age = float(db_parts[1]) if len(db_parts) > 1 else None
-                except ValueError:
-                    db_age = None
-                results.append([
-                    int(parts[0]),    # rank
-                    int(parts[1]),    # length
-                    float(parts[2]),  # similarity
-                    db_id,
-                    db_age,
-                ])
-        os.unlink(top_file)
+    if not os.path.exists(top_file):
+        print(f'    FALCON did not produce a top file for {sample_id}')
+        return results
 
+    with open(top_file, 'r') as f:
+        raw = f.read()
+
+    if not raw.strip():
+        print(f'    FALCON top file is empty for {sample_id}')
+        os.unlink(top_file)
+        return results
+
+    for line in raw.splitlines():
+        parts = line.strip().split('\t')
+        if len(parts) < 4:
+            continue
+        db_header = parts[3]
+
+        # Header format from FALCON output might vary (tries space first, then underscore)
+        if ' ' in db_header:
+            db_parts = db_header.split(' ', 1)
+            db_id    = db_parts[0]
+            try:
+                db_age = float(db_parts[1]) if len(db_parts) > 1 else None
+            except ValueError:
+                db_age = None
+        else:
+            # Fallback: underscore-delimited (e.g. ID_age)
+            db_parts = db_header.rsplit('_', 1)
+            db_id    = db_parts[0]
+            try:
+                db_age = float(db_parts[1]) if len(db_parts) > 1 else None
+            except ValueError:
+                db_age = None
+
+        results.append([
+            int(parts[0]),    # rank
+            int(parts[1]),    # length
+            float(parts[2]),  # similarity
+            db_id,
+            db_age,
+        ])
+
+    os.unlink(top_file)
     return results
 
 
@@ -139,7 +162,6 @@ def compute_nrc_age(top_list, sample_id, weighted=True):
         return sum(item[2] * item[4] for item in non_self) / norm_val
     else:
         return sum(item[4] for item in non_self) / len(non_self)
-
 
 # Quantitative features
 
