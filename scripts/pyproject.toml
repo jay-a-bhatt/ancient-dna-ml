@@ -11,4 +11,5 @@ dependencies = [
     "pandas>=3.0.1",
     "pycountry-convert>=0.7.2",
     "scikit-learn>=1.8.0",
+    "tqdm>=4.67.3",
 ]
