@@ -41,6 +41,7 @@ from sklearn.metrics          import (
     accuracy_score, f1_score,
     roc_auc_score, average_precision_score,
     roc_curve, precision_recall_curve,
+    precision_score, recall_score
 )
 import sklearn.base as skbase
 import xgboost as xgb
@@ -60,7 +61,7 @@ PRESENT_YEAR = 2026
 FEATURES     = ['NRC_AVERAGE_AGE', 'CG_CONTENT', 'N_CONTENT', 'RELATIVE_SIZE']
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(SCRIPT_DIR, '..', 'data', 'generated', 'features')
+DATA_DIR = os.path.join(SCRIPT_DIR, '..', 'data', 'generated', 'features', 'drive_features')
 OUT_DIR = os.path.join(SCRIPT_DIR, '..', 'data', 'generated', 'results')
 
 MODEL_COLORS = {
@@ -74,6 +75,11 @@ MODEL_COLORS = {
     'KNN':                 '#9B5DE5',
     'GaussianNB':          '#F15BB5',
 }
+
+def ancient_precision_recall(y_test, y_pred):
+    precision = precision_score(y_test, y_pred, pos_label=1, zero_division=0)
+    recall    = recall_score(y_test, y_pred, pos_label=1, zero_division=0)
+    return precision, recall
 
 def load_split(csv_path):
     df = pd.read_csv(csv_path, dtype={'ID': str})
@@ -236,13 +242,15 @@ def train_and_evaluate(train_df, train_ages, val_df, val_ages,
         f1_w = f1_score(y_test, y_pred, average='weighted', zero_division=0)
         f1_b = f1_score(y_test, y_pred, average='binary', zero_division=0)
         acc  = accuracy_score(y_test, y_pred)
-
+        prec_ancient, rec_ancient = ancient_precision_recall(y_test, y_pred)  # add this
         results[name] = {
             'f1_weighted': f1_w,
             'f1_binary':   f1_b,
             'accuracy':    acc,
             'auroc':       roc_auc_score(y_test, y_proba),
             'auprc':       average_precision_score(y_test, y_proba),
+            'precision_ancient': prec_ancient,   # add this
+            'recall_ancient':    rec_ancient,    # add this
             'y_test':      y_test,
             'y_proba':     y_proba,
             'y_pred':      y_pred,
@@ -266,6 +274,26 @@ def print_summary_table(results, threshold_years):
               f'{m["accuracy"]:>8.4f}  {m["auroc"]:>7.4f}  {m["auprc"]:>7.4f}')
     print(f'\n')
 
+def print_summary_table_2(results, threshold_years):
+    print(f'\nResults at threshold = {threshold_years} years ago ({threshold_years/100:.1f} centuries)\n')
+    header = f'{"Model":<22}  {"Accuracy":>9}  {"AUC-ROC":>7}  {"F1 Weighted":>11}  {"F1 Binary":>9}  {"Prec (Anc)":>10}  {"Recall (Anc)":>12}  {"AUPRC":>7}'
+    print(header)
+    print('-' * len(header))
+    
+    sorted_results = sorted(results.items(), key=lambda x: x[1]['accuracy'], reverse=True)
+    
+    for name, m in sorted_results:
+        print(
+            f'{name:<22}  '
+            f'{m["accuracy"]*100:>8.1f}%  '
+            f'{m["auroc"]*100:>6.1f}%  '
+            f'{m["f1_weighted"]*100:>10.1f}%  '
+            f'{m["f1_binary"]*100:>8.1f}%  '
+            f'{m["precision_ancient"]*100:>9.1f}%  '
+            f'{m["recall_ancient"]*100:>11.1f}%  '
+            f'{m["auprc"]*100:>6.1f}%'
+        )
+    print()
 
 def plot_roc_curves(results, threshold_years, outdir):
     fig, ax = plt.subplots(figsize=(8, 7))
@@ -378,9 +406,9 @@ def main():
     parser = argparse.ArgumentParser(
         description='Train all classifiers at a fixed ancient/modern threshold.'
     )
-    parser.add_argument('--train-csv', default=os.path.join(DATA_DIR, 'train_features.csv'))
-    parser.add_argument('--val-csv', default=os.path.join(DATA_DIR, 'val_features.csv'))
-    parser.add_argument('--test-csv', default=os.path.join(DATA_DIR, 'test_features.csv'))
+    parser.add_argument('--train-csv', default=os.path.join(DATA_DIR, 'train_features_with_age.csv'))
+    parser.add_argument('--val-csv', default=os.path.join(DATA_DIR, 'val_features_with_age.csv'))
+    parser.add_argument('--test-csv', default=os.path.join(DATA_DIR, 'test_features_with_age.csv'))
     parser.add_argument('--outdir', default=OUT_DIR)
     parser.add_argument('--threshold', type=int, default=None,
                         help='Override NEWEST_ANCIENT_AGE_YEARS from the command line '
@@ -410,7 +438,7 @@ def main():
         threshold_years,
     )
 
-    print_summary_table(results, threshold_years)
+    print_summary_table_2(results, threshold_years)
 
     rows = [{'model': n, **{k: v for k, v in m.items()
                              if k not in ('y_test', 'y_proba', 'y_pred')}}

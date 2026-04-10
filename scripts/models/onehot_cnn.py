@@ -37,9 +37,9 @@ NUM_WORKERS = 0
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 SEED = 48
 
-TRAIN_CSV = "data/train.csv"
-VAL_CSV   = "data/validation.csv"
-TEST_CSV  = "data/test.csv"
+TRAIN_CSV = "../data/generated/features/train_features.csv"
+VAL_CSV   = "../data/generated/features/val_features.csv"
+TEST_CSV  = "../data/generated/features/test_features.csv"
 
 torch.manual_seed(SEED)
 np.random.seed(SEED)
@@ -71,6 +71,7 @@ def sequence_to_onehot(seq: str, length: int = SEQ_LENGTH) -> np.ndarray:
 class FASTADataset(Dataset):
     def __init__(self, csv_path: str):
         df = pd.read_csv(csv_path)
+        df = df[df['AGE'].notna()].reset_index(drop=True) # drop rows with no AGE
         df.loc[df['AGE'] != 0, 'AGE'] = 2026 - df['AGE']
         df.columns = df.columns.str.upper()
 

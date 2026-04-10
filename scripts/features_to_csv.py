@@ -193,16 +193,18 @@ def extract_features(all_samples, train_fasta, falcon_bin, top_n, threads, ref_s
         for i, (sample_id, age, seq) in enumerate(all_samples, 1):
             print(f'  [{i}/{total}] {sample_id} (age={age})')
 
-            top_list    = run_falcon_for_sample(
-                falcon_bin, sample_id, age, seq,
-                train_fasta, tops_dir, top_n, threads
-            )
-            nrc_avg_age = compute_nrc_age(top_list, sample_id, weighted)
+            if falcon_bin is None:
+                nrc_avg_age = 0.0
+            else:
+                top_list    = run_falcon_for_sample(
+                    falcon_bin, sample_id, age, seq,
+                    train_fasta, tops_dir, top_n, threads
+                )
+                nrc_avg_age = compute_nrc_age(top_list, sample_id, weighted)
+                if nrc_avg_age is None:
+                    print(f'    WARNING: no valid NRC matches for {sample_id}, skipping.')
+                    continue
             cg, n, rel  = compute_quantitative(seq, ref_size)
-
-            if nrc_avg_age is None:
-                print(f'    WARNING: no valid NRC matches for {sample_id}, skipping.')
-                continue
 
             features[sample_id] = {
                 'ID':              sample_id,
@@ -249,8 +251,8 @@ def main():
     parser.add_argument('--train',       default=TRAIN_FASTA)
     parser.add_argument('--val',         default=VAL_FASTA)
     parser.add_argument('--test',        default=TEST_FASTA)
-    parser.add_argument('--falcon',      default='./FALCON',
-                        help='Path to FALCON binary')
+    parser.add_argument('--falcon',      default=None,
+                        help='Path to FALCON binary (optional)')
     parser.add_argument('--top',         type=int, default=50,
                         help='Top N matches (default: 50)')
     parser.add_argument('--threads',     type=int, default=12,
