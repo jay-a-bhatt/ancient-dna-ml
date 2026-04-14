@@ -27,18 +27,20 @@ import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 from matplotlib.lines import Line2D
 
 from sklearn.preprocessing   import StandardScaler
 from sklearn.impute           import SimpleImputer
 from sklearn.pipeline         import Pipeline
+from sklearn.inspection       import permutation_importance
 from sklearn.neighbors        import KNeighborsClassifier
 from sklearn.ensemble         import RandomForestClassifier
 from sklearn.naive_bayes      import GaussianNB
 from sklearn.svm              import SVC
 from sklearn.linear_model     import LogisticRegression
 from sklearn.metrics          import (
-    accuracy_score, f1_score,
+    accuracy_score, classification_report, f1_score,
     roc_auc_score, average_precision_score,
     roc_curve, precision_recall_curve,
     precision_score, recall_score
@@ -55,10 +57,13 @@ warnings.filterwarnings('ignore', category=UserWarning, module='catboost')
 # 
 # If sample age > NEWEST_ANCIENT_AGE_YEARS = ancient
 # If sample age < NEWEST_ANCIENT_AGE_YEARS = modern
-NEWEST_ANCIENT_AGE_YEARS = 2200
+NEWEST_ANCIENT_AGE_YEARS = 2000
 
 PRESENT_YEAR = 2026
 FEATURES     = ['NRC_AVERAGE_AGE', 'CG_CONTENT', 'N_CONTENT', 'RELATIVE_SIZE']
+
+# Number of permutation repeats for importance (higher = more stable, slower)
+N_PERMUTATION_REPEATS = 10
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(SCRIPT_DIR, '..', 'data', 'generated', 'features', 'drive_features')
@@ -189,11 +194,161 @@ def get_models():
     ]
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FEATURE IMPORTANCE
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _get_builtin_importance(model, feature_names):
+    """
+    Extract native feature importances where available.
+    - Tree models (XGBoost, LightGBM, CatBoost, RandomForest): feature_importances_
+    - Linear models (LogisticRegression): abs(coef_), normalized
+    - Pipeline: unwraps to the final estimator first
+    Returns a dict {feature: score} or None if unsupported (SVM, KNN, GaussianNB).
+    """
+    estimator = model[-1] if isinstance(model, Pipeline) else model
+
+    if hasattr(estimator, 'feature_importances_'):
+        scores = estimator.feature_importances_
+        return dict(zip(feature_names, scores / (scores.sum() + 1e-12)))
+
+    if hasattr(estimator, 'coef_'):
+        coef = np.abs(estimator.coef_)
+        if coef.ndim > 1:
+            coef = coef.mean(axis=0)
+        return dict(zip(feature_names, coef / (coef.sum() + 1e-12)))
+
+    return None  # KNN, SVM, GaussianNB have no native importance
+
+
+def _get_permutation_importance(model, X_test, y_test, feature_names,
+                                 n_repeats=N_PERMUTATION_REPEATS):
+    """
+    Model-agnostic importance: shuffle each feature and measure accuracy drop.
+    Works for every model including SVM and KNN.
+    Negative values (feature hurts when present) are clipped to 0.
+    Returns a dict {feature: normalized_score}.
+    """
+    result = permutation_importance(
+        model, X_test, y_test,
+        n_repeats=n_repeats,
+        random_state=42,
+        scoring='accuracy',
+        n_jobs=-1,
+    )
+    scores = np.clip(result.importances_mean, 0, None)
+    return dict(zip(feature_names, scores / (scores.sum() + 1e-12)))
+
+
+def compute_feature_importance(fitted_models, X_test, y_test, feature_names,
+                                needs_scaling_map, scaler):
+    """
+    For every fitted model collect:
+      - built-in importance  (tree / linear models only)
+      - permutation importance (all models)
+
+    fitted_models : list of (name, fitted_clf, needs_scaling)
+    X_test        : raw (unscaled) test features, numpy array
+    needs_scaling_map : dict {name: bool} - True only for GaussianNB
+    scaler        : the global StandardScaler fitted on train+val
+
+    Returns a DataFrame: rows=features, columns=model×method scores.
+    """
+    records = {f: {} for f in feature_names}
+
+    for name, clf, needs_scaling in fitted_models:
+        # Models that are sklearn Pipelines carry their own scaler internally,
+        # so always pass raw X. Only GaussianNB uses the global scaler.
+        X_eval = scaler.transform(X_test) if needs_scaling else X_test
+
+        # Permutation
+        perm = _get_permutation_importance(clf, X_eval, y_test, feature_names)
+        for f in feature_names:
+            records[f][f'{name}'] = perm[f]
+
+    df = pd.DataFrame(records).T
+    df.index.name = 'feature'
+    df['aggregate_score'] = df.mean(axis=1)
+    df['rank'] = df['aggregate_score'].rank(ascending=False).astype(int)
+    return df.sort_values('rank')
+
+
+def print_importance_table(df_imp):
+    print('\n' + '═' * 55)
+    print('  FEATURE IMPORTANCE RANKING (most → least important)')
+    print('═' * 55)
+    summary = df_imp[['rank', 'aggregate_score']].copy()
+    summary.columns = ['Rank', 'Aggregate Score']
+    print(summary.to_string())
+    print('═' * 55)
+    top = df_imp.index[0]
+    print(f'\n★  Most important feature: "{top}"  '
+          f'(aggregate score: {df_imp.loc[top, "aggregate_score"]:.4f})\n')
+
+
+def plot_feature_importance(df_imp, threshold_years, outdir):
+    """
+    Two-panel figure:
+      Left:  Aggregate importance bar chart (all features)
+      Right: Heatmap of importance per model/method
+    """
+    features  = df_imp.index.tolist()
+    score_cols = [c for c in df_imp.columns if c not in ('aggregate_score', 'rank')]
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, max(5, len(features) * 0.7)))
+    fig.suptitle(
+        f'Permutation Feature Importance (threshold={threshold_years} years ago)',
+        fontsize=13, fontweight='bold', y=1.01,
+    )
+
+    # ── Left: aggregate bar chart ──────────────────────────────────────────
+    ax1 = axes[0]
+    scores = df_imp['aggregate_score'].values
+    colors = cm.viridis(scores / (scores.max() + 1e-12))
+    bars   = ax1.barh(features[::-1], scores[::-1], color=colors[::-1],
+                      edgecolor='white')
+    ax1.set_xlabel('Aggregate Importance Score (normalized)', fontsize=10)
+    ax1.set_title('Overall Feature Ranking', fontsize=11, fontweight='bold')
+    ax1.spines[['top', 'right']].set_visible(False)
+    for bar, val in zip(bars, scores[::-1]):
+        ax1.text(bar.get_width() + 0.002,
+                 bar.get_y() + bar.get_height() / 2,
+                 f'{val:.3f}', va='center', ha='left', fontsize=9)
+
+    # ── Right: heatmap ──────────────────────────────────────────────────────
+    ax2 = axes[1]
+    heat_data = df_imp[score_cols].values
+    im = ax2.imshow(heat_data, aspect='auto', cmap='YlOrRd',
+                    vmin=0, vmax=heat_data.max())
+    ax2.set_yticks(range(len(features)))
+    ax2.set_yticklabels(features, fontsize=9)
+    ax2.set_xticks(range(len(score_cols)))
+    ax2.set_xticklabels(score_cols, rotation=40, ha='right', fontsize=7)
+    ax2.set_title('Feature Importance by Model', fontsize=11, fontweight='bold')
+    plt.colorbar(im, ax=ax2, label='Normalized importance', shrink=0.7)
+    for i in range(len(features)):
+        for j in range(len(score_cols)):
+            val = heat_data[i, j]
+            text_color = 'white' if val > heat_data.max() * 0.6 else 'black'
+            ax2.text(j, i, f'{val:.3f}', ha='center', va='center',
+                     fontsize=7, color=text_color)
+
+    plt.tight_layout()
+    path = os.path.join(outdir, 'feature_importance.png')
+    plt.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f'Saved to: {path}')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TRAINING & EVALUATION
+# ─────────────────────────────────────────────────────────────────────────────
+
 def train_and_evaluate(train_df, train_ages, val_df, val_ages,
                         test_df, test_ages, threshold_years):
     """
     Fits every model on train+val combined, evaluates on test.
-    Returns dict of results keyed by model name.
+    Returns (results dict, fitted_models list, X_test array, y_test array, scaler).
     """
     y_train = make_labels(train_ages, threshold_years)
     y_val   = make_labels(val_ages,   threshold_years)
@@ -218,7 +373,7 @@ def train_and_evaluate(train_df, train_ages, val_df, val_ages,
         )
 
     scaler = StandardScaler().fit(X_fit)
-    X_fit_s = scaler.transform(X_fit)
+    X_fit_s  = scaler.transform(X_fit)
     X_test_s = scaler.transform(X_test)
 
     n_pos = int(y_test.sum())
@@ -226,10 +381,12 @@ def train_and_evaluate(train_df, train_ages, val_df, val_ages,
     print(f'  Test set: {n_pos} ancient, {n_neg} modern '
           f'({n_pos/(n_pos+n_neg)*100:.1f}% ancient)')
 
-    results = {}
+    results       = {}
+    fitted_models = []   # (name, fitted_clf, needs_scaling)
+
     for name, model, needs_scaling in get_models():
-        clf = skbase.clone(model)
-        X_tr = X_fit_s if needs_scaling else X_fit
+        clf  = skbase.clone(model)
+        X_tr = X_fit_s  if needs_scaling else X_fit
         X_te = X_test_s if needs_scaling else X_test
 
         clf.fit(X_tr, y_fit)
@@ -240,25 +397,28 @@ def train_and_evaluate(train_df, train_ages, val_df, val_ages,
                      else np.full(len(y_test), float(clf.classes_[0])))
 
         f1_w = f1_score(y_test, y_pred, average='weighted', zero_division=0)
-        f1_b = f1_score(y_test, y_pred, average='binary', zero_division=0)
+        f1_b = f1_score(y_test, y_pred, average='binary',   zero_division=0)
         acc  = accuracy_score(y_test, y_pred)
-        prec_ancient, rec_ancient = ancient_precision_recall(y_test, y_pred)  # add this
+        prec_ancient, rec_ancient = ancient_precision_recall(y_test, y_pred)
+
         results[name] = {
-            'f1_weighted': f1_w,
-            'f1_binary':   f1_b,
-            'accuracy':    acc,
-            'auroc':       roc_auc_score(y_test, y_proba),
-            'auprc':       average_precision_score(y_test, y_proba),
-            'precision_ancient': prec_ancient,   # add this
-            'recall_ancient':    rec_ancient,    # add this
-            'y_test':      y_test,
-            'y_proba':     y_proba,
-            'y_pred':      y_pred,
+            'f1_weighted':       f1_w,
+            'f1_binary':         f1_b,
+            'accuracy':          acc,
+            'auroc':             roc_auc_score(y_test, y_proba),
+            'auprc':             average_precision_score(y_test, y_proba),
+            'precision_ancient': prec_ancient,
+            'recall_ancient':    rec_ancient,
+            'y_test':            y_test,
+            'y_proba':           y_proba,
+            'y_pred':            y_pred,
         }
+        fitted_models.append((name, clf, needs_scaling))
+
         print(f'{name:<22} | F1w={f1_w:.4f}  F1b={f1_b:.4f}  '
               f'Acc={acc:.4f}  AUROC={results[name]["auroc"]:.4f}')
 
-    return results
+    return results, fitted_models, X_test, y_test, scaler
 
 def print_summary_table(results, threshold_years):
     print(f'\n')
@@ -276,22 +436,22 @@ def print_summary_table(results, threshold_years):
 
 def print_summary_table_2(results, threshold_years):
     print(f'\nResults at threshold = {threshold_years} years ago ({threshold_years/100:.1f} centuries)\n')
-    header = f'{"Model":<22}  {"Accuracy":>9}  {"AUC-ROC":>7}  {"F1 Weighted":>11}  {"F1 Binary":>9}  {"Prec (Anc)":>10}  {"Recall (Anc)":>12}  {"AUPRC":>7}'
+    header = f'{"Model":<22}  {"Accuracy":>9}  {"AUC-ROC":>7}  {"Prec (Anc)":>10}  {"Recall (Anc)":>12}  {"F1 Weighted":>11}  {"F1 Binary":>9}'
     print(header)
     print('-' * len(header))
     
     sorted_results = sorted(results.items(), key=lambda x: x[1]['accuracy'], reverse=True)
     
     for name, m in sorted_results:
-        print(
-            f'{name:<22}  '
-            f'{m["accuracy"]*100:>8.1f}%  '
-            f'{m["auroc"]*100:>6.1f}%  '
-            f'{m["f1_weighted"]*100:>10.1f}%  '
-            f'{m["f1_binary"]*100:>8.1f}%  '
-            f'{m["precision_ancient"]*100:>9.1f}%  '
-            f'{m["recall_ancient"]*100:>11.1f}%  '
-            f'{m["auprc"]*100:>6.1f}%'
+        print('('
+            f'"{name + '",':<22}  '
+            f'{m["accuracy"]:>8.4f},  '
+            f'{m["auroc"]:>6.4f},  '
+            f'{m["precision_ancient"]:>9.4f},  '
+            f'{m["recall_ancient"]:>11.4f},  '
+            f'{m["f1_weighted"]:>10.4f},  '
+            f'{m["f1_binary"]:>8.4f},  '
+            '),'
         )
     print()
 
@@ -431,7 +591,7 @@ def main():
     print(f'Train: {len(train_df)} | Val: {len(val_df)} | Test: {len(test_df)}')
 
     print('\nTraining & evaluating all models')
-    results = train_and_evaluate(
+    results, fitted_models, X_test, y_test, scaler = train_and_evaluate(
         train_df, train_ages,
         val_df,   val_ages,
         test_df,  test_ages,
@@ -448,11 +608,23 @@ def main():
     results_df.to_csv(csv_path, index=False)
     print(f'Saved results table to: {csv_path}')
 
+    print('\nComputing feature importance across all models...')
+    df_imp = compute_feature_importance(
+        fitted_models, X_test, y_test, FEATURES,
+        needs_scaling_map={name: ns for name, _, ns in fitted_models},
+        scaler=scaler,
+    )
+    print_importance_table(df_imp)
+    imp_csv = os.path.join(args.outdir, 'feature_importance.csv')
+    df_imp.to_csv(imp_csv)
+    print(f'Saved feature importance table to: {imp_csv}')
+
     print('\nGenerating plots')
     plot_roc_curves(results, threshold_years, args.outdir)
     plot_pr_curves(results, threshold_years, args.outdir)
     plot_f1_bar(results, threshold_years, args.outdir)
     plot_accuracy_bar(results, threshold_years, args.outdir)
+    plot_feature_importance(df_imp, threshold_years, args.outdir)
 
     print(f'\nOutputs saved to: {args.outdir}')
 

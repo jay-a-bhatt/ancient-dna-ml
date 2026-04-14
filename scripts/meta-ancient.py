@@ -46,6 +46,7 @@ def get_amtDB_cols(file_path):
 
     try:
         df = pd.read_csv(file_path, usecols = amtDB_cols_to_keep)
+        print(f'amtDB start cols: {len(df)}')
         df['age'] = ((df['year_from'] + df['year_to']) / 2).round().astype(int)
         df = df.drop(columns=['year_from', 'year_to'])
         # Drop Rows with no haplogroup
@@ -69,6 +70,7 @@ def get_AADR_cols(metadata_filepath, fasta_filepath):
 
     # Keep Genetic ID, age, country.
     df_meta = pd.read_excel(metadata_filepath, na_values=["n/a (<2x)", ".."], usecols=[0,1,9,15,31])
+    print(f'AADR start cols: {len(df_meta)}')
     df_meta.rename(columns={df_meta.columns[0]: 'genetic_id'}, inplace=True)
     df_meta.rename(columns={df_meta.columns[1]: 'master_id'}, inplace=True)
     df_meta.rename(columns={df_meta.columns[2]: 'age'}, inplace=True)
@@ -98,6 +100,8 @@ def get_AADR_cols(metadata_filepath, fasta_filepath):
 
 amtDB_df = get_amtDB_cols("../data/metadata/amtdb_metadata.csv")
 aadr_df  = get_AADR_cols("../data/metadata/v62.0_1240k_public.xlsx", "../data/aadr.fasta")
+print(len(amtDB_df))
+print(len(aadr_df))
 
 # If a master_id exists in both, keep='first' keeps the amtDB row
 combined_df = pd.concat([amtDB_df, aadr_df], ignore_index=True)
@@ -105,7 +109,7 @@ combined_df = combined_df.drop_duplicates(subset=['master_id'], keep='first')
 
 # drop rows with no continent
 combined_df = combined_df.dropna(subset=['continent'])
-
+print(len(combined_df))
 # Save to CSV
 output_filename = "ancient_mtDNA_metadata.csv"
 combined_df.to_csv(output_filename, index=False)
